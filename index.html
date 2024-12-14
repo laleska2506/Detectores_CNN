@@ -1,0 +1,192 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Clasificación: Feliz o Triste</title>
+
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.0.2/dist/css/bootstrap.min.css" rel="stylesheet">
+    <style>
+      #resultado {
+        font-weight: bold;
+        font-size: 2rem;
+        text-align: center;
+        margin-top: 20px;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <div class="text-center py-4">
+        <h1 class="display-5 fw-bold">Clasificación: Feliz o Triste</h1>
+        <p class="lead">Clasifica en tiempo real si la imagen es <strong>Feliz</strong> o <strong>Triste</strong> usando TensorFlow.js y la cámara web.</p>
+      </div>
+
+      <div class="container mt-5">
+        <div class="row">
+          <div class="col-12 col-md-6 offset-md-3 text-center">
+            <video id="video" playsinline autoplay style="display: none;"></video>
+            <button class="btn btn-primary mb-3" id="cambiar-camara" onclick="cambiarCamara();">Cambiar cámara</button>
+            <canvas id="canvas" width="400" height="400" style="max-width: 100%;"></canvas>
+            <canvas id="otrocanvas" width="100" height="100" style="display: none;"></canvas>
+            <div id="resultado"></div>
+          </div>
+        </div>
+      </div>
+    </main>
+
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.22.0"></script>
+    <script>
+      // Variables principales
+      const tamano = 400;
+      const video = document.getElementById("video");
+      const canvas = document.getElementById("canvas");
+      const otrocanvas = document.getElementById("otrocanvas");
+      const ctx = canvas.getContext("2d");
+      let currentStream = null;
+      let facingMode = "user";
+      let modelo = null;
+
+      // Cargar el modelo
+      (async() => {
+      console.log("Cargando modelo...");
+      modelo = await tf.loadLayersModel("model.json");
+      console.log("Modelo cargado");
+      })();
+
+
+
+      // Iniciar cámara
+      window.onload = function () {
+        mostrarCamara();
+      };
+
+      function mostrarCamara() {
+        const opciones = {
+          audio: false,
+          video: { width: tamano, height: tamano }
+        };
+
+        if (navigator.mediaDevices.getUserMedia) {
+          navigator.mediaDevices.getUserMedia(opciones)
+            .then(function (stream) {
+              currentStream = stream;
+              video.srcObject = currentStream;
+              procesarCamara();
+              predecir();
+            })
+            .catch(function (err) {
+              alert("No se pudo utilizar la cámara.");
+              console.error(err);
+            });
+        } else {
+          alert("Tu navegador no soporta getUserMedia.");
+        }
+      }
+
+      function cambiarCamara() {
+        if (currentStream) {
+          currentStream.getTracks().forEach(track => track.stop());
+        }
+
+        facingMode = facingMode === "user" ? "environment" : "user";
+
+        const opciones = {
+          audio: false,
+          video: { facingMode, width: tamano, height: tamano }
+        };
+
+        navigator.mediaDevices.getUserMedia(opciones)
+          .then(function (stream) {
+            currentStream = stream;
+            video.srcObject = currentStream;
+          })
+          .catch(function (err) {
+            console.error("Error al cambiar de cámara", err);
+          });
+      }
+
+      // Procesar cámara
+      function procesarCamara() {
+        ctx.drawImage(video, 0, 0, tamano, tamano, 0, 0, tamano, tamano);
+        setTimeout(procesarCamara, 20);
+      }
+
+      // Predicción en tiempo real
+      function predecir() {
+        if (modelo) {
+          // Redimensionar la imagen al tamaño esperado por el modelo (256x256)
+          resample_single(canvas, 256, 256, otrocanvas);
+
+          // Obtener los datos de la imagen redimensionada
+          const ctx2 = otrocanvas.getContext("2d");
+          const imgData = ctx2.getImageData(0, 0, 256, 256);
+
+          // Crear un arreglo para la imagen RGB
+          const arr = [];
+          let arr256 = [];
+
+          for (let p = 0; p < imgData.data.length; p += 4) {
+            // Normalizar los valores RGB entre 0 y 1
+            const rojo = imgData.data[p] / 255;
+            const verde = imgData.data[p + 1] / 255;
+            const azul = imgData.data[p + 2] / 255;
+
+            arr256.push([rojo, verde, azul]); // Guardar los 3 canales
+            if (arr256.length === 256) {
+              arr.push(arr256);
+              arr256 = [];
+            }
+          }
+
+          // Agregar una dimensión batch para el modelo
+          const tensor = tf.tensor4d([arr]);
+
+          // Realizar la predicción
+          const resultado = modelo.predict(tensor).dataSync();
+
+          // Mostrar el resultado en la interfaz
+          const respuesta = resultado[0] <= 0.5 ? "😢 Triste" : "😊 Feliz";
+          document.getElementById("resultado").innerHTML = respuesta;
+
+          tensor.dispose(); // Liberar memoria
+        }
+
+        // Llamar a la función nuevamente
+        setTimeout(predecir, 150);
+      }
+
+      // Redimensionar imagen
+      function resample_single(canvas, width, height, resize_canvas) {
+        const width_source = canvas.width;
+        const height_source = canvas.height;
+
+        // Agrega { willReadFrequently: true }
+        const ctx = canvas.getContext("2d", { willReadFrequently: true });
+        const ctx2 = resize_canvas.getContext("2d", { willReadFrequently: true });
+
+        const img = ctx.getImageData(0, 0, width_source, height_source);
+        const img2 = ctx2.createImageData(width, height);
+        const data = img.data;
+        const data2 = img2.data;
+
+        for (let j = 0; j < height; j++) {
+          for (let i = 0; i < width; i++) {
+            const x2 = (i + j * width) * 4;
+            const center_x = (i + 0.5) * (width_source / width);
+            const center_y = (j + 0.5) * (height_source / height);
+            const pos_x = 4 * (Math.floor(center_x) + Math.floor(center_y) * width_source);
+
+            data2[x2] = data[pos_x];
+            data2[x2 + 1] = data[pos_x + 1];
+            data2[x2 + 2] = data[pos_x + 2];
+            data2[x2 + 3] = data[pos_x + 3];
+          }
+        }
+        ctx2.putImageData(img2, 0, 0);
+      }
+
+
+    </script>
+  </body>
+</html>
